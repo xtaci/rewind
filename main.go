@@ -45,6 +45,12 @@ func processor(c *cli.Context) error {
 	if err := g.SetKeybinding("", gocui.KeyTab, gocui.ModNone, nextView); err != nil {
 		log.Panicln(err)
 	}
+	if err := g.SetKeybinding("topic", gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
+		return err
+	}
+	if err := g.SetKeybinding("topic", gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
+		return err
+	}
 
 	go play(g, "test", 0, 0)
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
@@ -90,6 +96,30 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64) {
 		})
 	}
 }
+func cursorUp(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		ox, oy := v.Origin()
+		cx, cy := v.Cursor()
+		if err := v.SetCursor(cx, cy-1); err != nil && oy > 0 {
+			if err := v.SetOrigin(ox, oy-1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+func cursorDown(g *gocui.Gui, v *gocui.View) error {
+	if v != nil {
+		cx, cy := v.Cursor()
+		if err := v.SetCursor(cx, cy+1); err != nil {
+			ox, oy := v.Origin()
+			if err := v.SetOrigin(ox, oy+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 func layout(g *gocui.Gui) error {
 	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
@@ -111,6 +141,9 @@ func layout(g *gocui.Gui) error {
 		for k := range topics {
 			fmt.Fprintln(v, topics[k])
 		}
+		v.Highlight = true
+		v.SelBgColor = gocui.ColorGreen
+		v.SelFgColor = gocui.ColorBlack
 		g.SetCurrentView("topic")
 	}
 
