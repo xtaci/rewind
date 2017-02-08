@@ -7,6 +7,7 @@ import (
 
 	cli "gopkg.in/urfave/cli.v2"
 
+	"github.com/Shopify/sarama"
 	"github.com/jroimartin/gocui"
 )
 
@@ -53,7 +54,18 @@ func layout(g *gocui.Gui) error {
 			return err
 		}
 		v.Title = "Topics"
-		fmt.Fprintln(v, "TODO:list topic")
+		client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
+		if err != nil {
+			panic(err)
+		}
+		topics, err := client.Topics()
+		if err != nil {
+			panic(err)
+		}
+
+		for k := range topics {
+			fmt.Fprintln(v, topics[k])
+		}
 	}
 
 	if v, err := g.SetView("control", 11, maxY-10, maxX-1, maxY-1); err != nil {
