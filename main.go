@@ -36,8 +36,13 @@ func processor(c *cli.Context) error {
 	defer g.Close()
 
 	g.SetManagerFunc(layout)
+	g.Highlight = true
+	g.SelFgColor = gocui.ColorGreen
 
 	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
+		log.Panicln(err)
+	}
+	if err := g.SetKeybinding("", gocui.KeyTab, gocui.ModNone, nextView); err != nil {
 		log.Panicln(err)
 	}
 
@@ -48,6 +53,15 @@ func processor(c *cli.Context) error {
 	return nil
 }
 
+var active = 0
+var viewNames = []string{"topic", "control", "content"}
+
+func nextView(g *gocui.Gui, v *gocui.View) error {
+	g.SetCurrentView(viewNames[active])
+	active = (active + 1) % len(viewNames)
+
+	return nil
+}
 func play(g *gocui.Gui, topic string, partition int32, offset int64) {
 	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
 	if err != nil {
@@ -84,7 +98,7 @@ func layout(g *gocui.Gui) error {
 	}
 
 	maxX, maxY := g.Size()
-	if v, err := g.SetView("topics", 0, 0, 10, maxY-1); err != nil {
+	if v, err := g.SetView("topic", 0, 0, 10, maxY-1); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
@@ -97,6 +111,7 @@ func layout(g *gocui.Gui) error {
 		for k := range topics {
 			fmt.Fprintln(v, topics[k])
 		}
+		g.SetCurrentView("topic")
 	}
 
 	if v, err := g.SetView("control", 11, maxY-10, maxX-1, maxY-1); err != nil {
@@ -112,6 +127,8 @@ func layout(g *gocui.Gui) error {
 			return err
 		}
 		v.Title = "DATA"
+		v.Wrap = true
+		v.Autoscroll = true
 	}
 
 	return nil
