@@ -48,12 +48,30 @@ func processor(c *cli.Context) error {
 
 func layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
-	if v, err := g.SetView("hello", maxX/2-7, maxY/2, maxX/2+7, maxY/2+2); err != nil {
+	if v, err := g.SetView("topics", 0, 0, 10, maxY-1); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		fmt.Fprintln(v, "Hello world!")
+		v.Title = "Topics"
+		fmt.Fprintln(v, "TODO:list topic")
 	}
+
+	if v, err := g.SetView("control", 11, maxY-10, maxX-1, maxY-1); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		v.Title = "Control Panel"
+		fmt.Fprintln(v, "TODO: rewind/replay/fastforward")
+	}
+
+	if v, err := g.SetView("view", 11, 0, maxX-1, maxY-11); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		v.Title = "View"
+		fmt.Fprintln(v, "TODO: Display kafka content ")
+	}
+
 	return nil
 }
 
