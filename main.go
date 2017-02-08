@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	cli "gopkg.in/urfave/cli.v2"
@@ -55,8 +56,16 @@ func processor(c *cli.Context) error {
 	if err := g.SetKeybinding("topic", gocui.KeyEnter, gocui.ModNone, selectTopic); err != nil {
 		return err
 	}
+	if err := g.SetKeybinding("partition", gocui.KeyEnter, gocui.ModNone, selectPartition); err != nil {
+		return err
+	}
+	if err := g.SetKeybinding("partition", gocui.KeyArrowDown, gocui.ModNone, cursorDown); err != nil {
+		return err
+	}
+	if err := g.SetKeybinding("partition", gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
+		return err
+	}
 
-	go play(g, "test", 0, 0, breaker)
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
 		log.Panicln(err)
 	}
@@ -64,8 +73,10 @@ func processor(c *cli.Context) error {
 }
 
 var active = 0
-var viewNames = []string{"topic", "control", "content"}
+var viewNames = []string{"topic", "control", "data"}
 var breaker = make(chan struct{})
+var topic string
+var partition int
 
 func nextView(g *gocui.Gui, v *gocui.View) error {
 	g.SetCurrentView(viewNames[active])
@@ -95,12 +106,13 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 		select {
 		case msg := <-partitionConsumer.Messages():
 			g.Execute(func(g *gocui.Gui) error {
-				v, err := g.View("content")
+				v, err := g.View("data")
 				if err != nil {
 					return err
 					// handle error
 				}
 				v.Clear()
+				v.Title = fmt.Sprintf("DATA(topic:%v partition:%v offset:%v)", topic, partition, msg.Offset)
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
 			})
@@ -144,9 +156,55 @@ func selectTopic(g *gocui.Gui, v *gocui.View) error {
 	if l, err = v.Line(cy); err != nil {
 		l = ""
 	}
+	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
+	if err != nil {
+		panic(err)
+	}
+	defer client.Close()
+
+	parts, err := client.Partitions(l)
+	if err != nil {
+		panic(err)
+	}
+
+	topic = l
+	maxX, maxY := g.Size()
+	if v, err := g.SetView("partition", maxX/2-30, maxY/2, maxX/2+30, maxY/2+2); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		for k := range parts {
+			fmt.Fprintln(v, parts[k])
+		}
+		if _, err := g.SetCurrentView("partition"); err != nil {
+			return err
+		}
+		v.Title = "Select Partition"
+	}
+	return nil
+}
+
+func selectPartition(g *gocui.Gui, v *gocui.View) error {
+	var l string
+	var err error
+
+	_, cy := v.Cursor()
+	if l, err = v.Line(cy); err != nil {
+		l = ""
+	}
 	close(breaker)
 	breaker = make(chan struct{})
-	go play(g, l, 0, 0, breaker)
+
+	partition, _ = strconv.Atoi(l)
+	go play(g, topic, int32(partition), 0, breaker)
+
+	if err := g.DeleteView("partition"); err != nil {
+		return err
+	}
+	if _, err := g.SetCurrentView("topic"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -184,7 +242,7 @@ func layout(g *gocui.Gui) error {
 		fmt.Fprintln(v, "TODO: rewind/replay/fastforward")
 	}
 
-	if v, err := g.SetView("content", 11, 0, maxX-1, maxY-11); err != nil {
+	if v, err := g.SetView("data", 11, 0, maxX-1, maxY-11); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
