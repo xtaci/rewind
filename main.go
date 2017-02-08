@@ -56,7 +56,7 @@ func processor(c *cli.Context) error {
 		return err
 	}
 
-	go play(g, "test", 0, 0)
+	go play(g, "test", 0, 0, breaker)
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
 		log.Panicln(err)
 	}
@@ -65,6 +65,7 @@ func processor(c *cli.Context) error {
 
 var active = 0
 var viewNames = []string{"topic", "control", "content"}
+var breaker = make(chan struct{})
 
 func nextView(g *gocui.Gui, v *gocui.View) error {
 	g.SetCurrentView(viewNames[active])
@@ -73,10 +74,7 @@ func nextView(g *gocui.Gui, v *gocui.View) error {
 	return nil
 }
 
-var breaker chan struct{}
-
-func play(g *gocui.Gui, topic string, partition int32, offset int64) {
-	breaker = make(chan struct{})
+func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan struct{}) {
 	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
 	if err != nil {
 		panic(err)
@@ -107,7 +105,7 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64) {
 				return nil
 			})
 			<-time.After(20 * time.Millisecond)
-		case <-breaker:
+		case <-die:
 			return
 		}
 	}
@@ -147,7 +145,8 @@ func selectTopic(g *gocui.Gui, v *gocui.View) error {
 		l = ""
 	}
 	close(breaker)
-	go play(g, l, 0, 0)
+	breaker = make(chan struct{})
+	go play(g, l, 0, 0, breaker)
 	return nil
 }
 
