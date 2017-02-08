@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	cli "gopkg.in/urfave/cli.v2"
 
@@ -51,6 +52,9 @@ func processor(c *cli.Context) error {
 	if err := g.SetKeybinding("topic", gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
 		return err
 	}
+	if err := g.SetKeybinding("topic", gocui.KeyEnter, gocui.ModNone, selectTopic); err != nil {
+		return err
+	}
 
 	go play(g, "test", 0, 0)
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
@@ -68,34 +72,47 @@ func nextView(g *gocui.Gui, v *gocui.View) error {
 
 	return nil
 }
+
+var breaker chan struct{}
+
 func play(g *gocui.Gui, topic string, partition int32, offset int64) {
+	breaker = make(chan struct{})
 	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
 	if err != nil {
 		panic(err)
 	}
+	defer client.Close()
 	consumer, err := sarama.NewConsumerFromClient(client)
 	if err != nil {
 		panic(err)
 	}
+	defer consumer.Close()
 	partitionConsumer, err := consumer.ConsumePartition(topic, int32(partition), int64(offset))
 	if err != nil {
 		panic(err)
 	}
+	defer partitionConsumer.Close()
 
 	for {
-		msg := <-partitionConsumer.Messages()
-		g.Execute(func(g *gocui.Gui) error {
-			v, err := g.View("content")
-			if err != nil {
-				return err
-				// handle error
-			}
-			v.Clear()
-			fmt.Fprintln(v, string(msg.Value))
-			return nil
-		})
+		select {
+		case msg := <-partitionConsumer.Messages():
+			g.Execute(func(g *gocui.Gui) error {
+				v, err := g.View("content")
+				if err != nil {
+					return err
+					// handle error
+				}
+				v.Clear()
+				fmt.Fprintln(v, string(msg.Value))
+				return nil
+			})
+			<-time.After(20 * time.Millisecond)
+		case <-breaker:
+			return
+		}
 	}
 }
+
 func cursorUp(g *gocui.Gui, v *gocui.View) error {
 	if v != nil {
 		ox, oy := v.Origin()
@@ -118,6 +135,19 @@ func cursorDown(g *gocui.Gui, v *gocui.View) error {
 			}
 		}
 	}
+	return nil
+}
+
+func selectTopic(g *gocui.Gui, v *gocui.View) error {
+	var l string
+	var err error
+
+	_, cy := v.Cursor()
+	if l, err = v.Line(cy); err != nil {
+		l = ""
+	}
+	close(breaker)
+	go play(g, l, 0, 0)
 	return nil
 }
 
