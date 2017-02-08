@@ -41,23 +41,54 @@ func processor(c *cli.Context) error {
 		log.Panicln(err)
 	}
 
+	go play(g, "test", 0, 0)
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
 		log.Panicln(err)
 	}
 	return nil
 }
 
+func play(g *gocui.Gui, topic string, partition int32, offset int64) {
+	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
+	if err != nil {
+		panic(err)
+	}
+	consumer, err := sarama.NewConsumerFromClient(client)
+	if err != nil {
+		panic(err)
+	}
+	partitionConsumer, err := consumer.ConsumePartition(topic, int32(partition), int64(offset))
+	if err != nil {
+		panic(err)
+	}
+
+	for {
+		msg := <-partitionConsumer.Messages()
+		g.Execute(func(g *gocui.Gui) error {
+			v, err := g.View("content")
+			if err != nil {
+				return err
+				// handle error
+			}
+			v.Clear()
+			fmt.Fprintln(v, string(msg.Value))
+			return nil
+		})
+	}
+}
+
 func layout(g *gocui.Gui) error {
+	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
+	if err != nil {
+		panic(err)
+	}
+
 	maxX, maxY := g.Size()
 	if v, err := g.SetView("topics", 0, 0, 10, maxY-1); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		v.Title = "Topics"
-		client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
-		if err != nil {
-			panic(err)
-		}
+		v.Title = "TOPIC"
 		topics, err := client.Topics()
 		if err != nil {
 			panic(err)
@@ -72,16 +103,15 @@ func layout(g *gocui.Gui) error {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		v.Title = "Control Panel"
+		v.Title = "CTRL"
 		fmt.Fprintln(v, "TODO: rewind/replay/fastforward")
 	}
 
-	if v, err := g.SetView("view", 11, 0, maxX-1, maxY-11); err != nil {
+	if v, err := g.SetView("content", 11, 0, maxX-1, maxY-11); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		v.Title = "View"
-		fmt.Fprintln(v, "TODO: Display kafka content ")
+		v.Title = "DATA"
 	}
 
 	return nil
