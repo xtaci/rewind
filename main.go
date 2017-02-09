@@ -14,10 +14,19 @@ import (
 	"github.com/jroimartin/gocui"
 )
 
+const (
+	cmdPlay = iota
+	cmdRewind
+	cmdFF
+	cmdJumpOldest
+	cmdJmpNewest
+)
+
 var (
 	active    = 0
 	viewNames = []string{"topic", "data"}
 	breaker   = make(chan struct{})
+	control   = make(chan int, 1)
 	topic     string
 	partition int
 	brokers   []string
@@ -77,9 +86,19 @@ func processor(c *cli.Context) error {
 	if err := g.SetKeybinding("partition", gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
 		return err
 	}
-
+	if err := g.SetKeybinding("data", gocui.KeySpace, gocui.ModNone, onCmdPlay); err != nil {
+		return err
+	}
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
 		log.Panicln(err)
+	}
+	return nil
+}
+
+func onCmdPlay(g *gocui.Gui, v *gocui.View) error {
+	select {
+	case control <- cmdPlay:
+	default:
 	}
 	return nil
 }
@@ -92,6 +111,7 @@ func nextView(g *gocui.Gui, v *gocui.View) error {
 }
 
 func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan struct{}) {
+	var paused bool
 	wg.Add(1)
 	client, err := sarama.NewClient(brokers, nil)
 	if err != nil {
@@ -109,9 +129,10 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 	}
 	defer partitionConsumer.Close()
 
+	chMessage := partitionConsumer.Messages()
 	for {
 		select {
-		case msg := <-partitionConsumer.Messages():
+		case msg := <-chMessage:
 			g.Execute(func(g *gocui.Gui) error {
 				v, _ := g.View("data")
 				v.Clear()
@@ -119,7 +140,16 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
 			})
-			//<-time.After(20 * time.Millisecond)
+		case c := <-control:
+			switch c {
+			case cmdPlay:
+				paused = !paused
+				if paused {
+					chMessage = nil
+				} else {
+					chMessage = partitionConsumer.Messages()
+				}
+			}
 		case <-die:
 			wg.Done()
 			return
@@ -205,7 +235,7 @@ func selectPartition(g *gocui.Gui, v *gocui.View) error {
 	if err := g.DeleteView("partition"); err != nil {
 		return err
 	}
-	if _, err := g.SetCurrentView("topic"); err != nil {
+	if _, err := g.SetCurrentView("data"); err != nil {
 		return err
 	}
 	client, err := sarama.NewClient(brokers, nil)
