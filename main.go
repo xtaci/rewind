@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"sync"
 
 	cli "gopkg.in/urfave/cli.v2"
 
@@ -19,6 +20,7 @@ var (
 	topic     string
 	partition int
 	brokers   []string
+	wg        sync.WaitGroup
 )
 
 func main() {
@@ -89,6 +91,7 @@ func nextView(g *gocui.Gui, v *gocui.View) error {
 }
 
 func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan struct{}) {
+	wg.Add(1)
 	client, err := sarama.NewClient(brokers, nil)
 	if err != nil {
 		panic(err)
@@ -122,6 +125,7 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 			})
 			//<-time.After(20 * time.Millisecond)
 		case <-die:
+			wg.Done()
 			return
 		}
 	}
@@ -198,7 +202,7 @@ func selectPartition(g *gocui.Gui, v *gocui.View) error {
 	}
 	close(breaker)
 	breaker = make(chan struct{})
-
+	wg.Wait()
 	partition, _ = strconv.Atoi(l)
 	go play(g, topic, int32(partition), sarama.OffsetOldest, breaker)
 
