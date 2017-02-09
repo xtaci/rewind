@@ -115,6 +115,7 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 					// handle error
 				}
 				v.Clear()
+
 				v.Title = fmt.Sprintf("DATA(topic:%v partition:%v offset:%v)", topic, partition, msg.Offset)
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
@@ -252,7 +253,6 @@ func layout(g *gocui.Gui) error {
 		}
 		v.Title = "DATA"
 		v.Wrap = true
-		v.Autoscroll = true
 	}
 
 	return nil
