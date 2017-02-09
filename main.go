@@ -402,7 +402,6 @@ func layout(g *gocui.Gui) error {
 		}
 		v.Title = "GLOBAL OPTIONS"
 		fmt.Fprintln(v, "Tab: Next View")
-		fmt.Fprintln(v, "F5: Refresh Topics")
 		fmt.Fprintln(v, "^C: Exit")
 	}
 
