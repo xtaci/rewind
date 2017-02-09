@@ -15,7 +15,7 @@ import (
 
 var (
 	active    = 0
-	viewNames = []string{"topic", "control", "data"}
+	viewNames = []string{"topic", "data"}
 	breaker   = make(chan struct{})
 	topic     string
 	partition int
@@ -26,7 +26,7 @@ var (
 func main() {
 	app := &cli.App{
 		Name:    "rewind",
-		Usage:   `a kafka player like tape control`,
+		Usage:   `a kafka topic player`,
 		Version: "1.0",
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{
@@ -247,8 +247,14 @@ func layout(g *gocui.Gui) error {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		v.Title = "CTRL"
-		fmt.Fprintln(v, "TODO: rewind/replay/fastforward")
+		v.Title = "KEYBINDINGS"
+		fmt.Fprintln(v, "Tab: Next View")
+		fmt.Fprintln(v, "Space: Pause/Play")
+		fmt.Fprintln(v, "← → : FastForward/Rewind")
+		fmt.Fprintln(v, "[: Jump to oldest")
+		fmt.Fprintln(v, "]: Jump to newest")
+		fmt.Fprintln(v, "Ctrl+O: Seek to Offset")
+		fmt.Fprintln(v, "^C: Exit")
 	}
 
 	if v, err := g.SetView("data", 11, 0, maxX-1, maxY-11); err != nil {
