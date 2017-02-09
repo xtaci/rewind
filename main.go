@@ -114,7 +114,7 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 			g.Execute(func(g *gocui.Gui) error {
 				v, _ := g.View("data")
 				v.Clear()
-				v.Title = fmt.Sprintf("DATA -- %v", msg.Offset)
+				v.Title = fmt.Sprintf("KEY:%v OFFSET:%v TIMESTAMP:%v", string(msg.Key), msg.Offset, msg.Timestamp)
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
 			})
