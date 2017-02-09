@@ -320,7 +320,6 @@ func layout(g *gocui.Gui) error {
 		fmt.Fprintln(v, "← → : Back/Forward")
 		fmt.Fprintln(v, "[: Jump to oldest")
 		fmt.Fprintln(v, "]: Jump to newest")
-		fmt.Fprintln(v, "Ctrl+O: Seek to Offset")
 	}
 
 	if v, err := g.SetView("info", 11+30+1, maxY-10, 11+30+50, maxY-1); err != nil {
