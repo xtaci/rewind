@@ -427,7 +427,11 @@ func refreshInfo(g *gocui.Gui) {
 		fmt.Fprintf(infoview, "Replicas: %v\n", replicas)
 		broker, _ := client.Leader(topic, int32(partition))
 		fmt.Fprintf(infoview, "Leader: %v\n", broker.ID())
-		fmt.Fprintf(infoview, "Paused: %v\n", paused)
+		if paused {
+			fmt.Fprintf(infoview, "\033[31mPAUSED\033[0m\n")
+		} else {
+			fmt.Fprintf(infoview, "\033[32mPLAYING\033[0m\n")
+		}
 		return nil
 	})
 }
