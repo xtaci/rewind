@@ -112,13 +112,8 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 		select {
 		case msg := <-partitionConsumer.Messages():
 			g.Execute(func(g *gocui.Gui) error {
-				v, err := g.View("data")
-				if err != nil {
-					return err
-					// handle error
-				}
+				v, _ := g.View("data")
 				v.Clear()
-
 				v.Title = fmt.Sprintf("DATA(topic:%v partition:%v offset:%v)", topic, partition, msg.Offset)
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
@@ -177,7 +172,7 @@ func selectTopic(g *gocui.Gui, v *gocui.View) error {
 
 	topic = l
 	maxX, maxY := g.Size()
-	if v, err := g.SetView("partition", maxX/2-30, maxY/2, maxX/2+30, maxY/2+2); err != nil {
+	if v, err := g.SetView("partition", maxX/2-10, maxY/2, maxX/2+10, maxY/2+2); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
@@ -212,7 +207,21 @@ func selectPartition(g *gocui.Gui, v *gocui.View) error {
 	if _, err := g.SetCurrentView("topic"); err != nil {
 		return err
 	}
+	client, err := sarama.NewClient(brokers, nil)
+	if err != nil {
+		panic(err)
+	}
+	defer client.Close()
 
+	infoview, _ := g.View("info")
+	infoview.Clear()
+	fmt.Fprintf(infoview, "Brokers: %v\n", brokers)
+	fmt.Fprintf(infoview, "Topic: %v\n", topic)
+	fmt.Fprintf(infoview, "Partition: %v\n", partition)
+	replicas, _ := client.Replicas(topic, int32(partition))
+	fmt.Fprintf(infoview, "Replicas: %v\n", replicas)
+	broker, _ := client.Leader(topic, int32(partition))
+	fmt.Fprintf(infoview, "Leader: %v\n", broker.ID())
 	return nil
 }
 
@@ -243,17 +252,32 @@ func layout(g *gocui.Gui) error {
 		g.SetCurrentView("topic")
 	}
 
-	if v, err := g.SetView("control", 11, maxY-10, maxX-1, maxY-1); err != nil {
+	if v, err := g.SetView("play", 11, maxY-10, 11+30, maxY-1); err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
-		v.Title = "KEYBINDINGS"
-		fmt.Fprintln(v, "Tab: Next View")
+		v.Title = "PLAY"
 		fmt.Fprintln(v, "Space: Pause/Play")
-		fmt.Fprintln(v, "← → : FastForward/Rewind")
+		fmt.Fprintln(v, "← → : Rewind/FastForward")
 		fmt.Fprintln(v, "[: Jump to oldest")
 		fmt.Fprintln(v, "]: Jump to newest")
 		fmt.Fprintln(v, "Ctrl+O: Seek to Offset")
+	}
+
+	if v, err := g.SetView("info", 11+30+1, maxY-10, 11+30+50, maxY-1); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		v.Title = "INFO"
+	}
+
+	if v, err := g.SetView("options", 11+30+50+1, maxY-10, maxX-1, maxY-1); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		v.Title = "GLOBAL OPTIONS"
+		fmt.Fprintln(v, "Tab: Next View")
+		fmt.Fprintln(v, "F5: Refresh Topics")
 		fmt.Fprintln(v, "^C: Exit")
 	}
 
