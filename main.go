@@ -25,13 +25,13 @@ const (
 var (
 	active    = 0
 	viewNames = []string{"topic", "data"}
-	breaker   = make(chan struct{})
 	control   = make(chan int, 1)
 	client    sarama.Client
 	topic     string
 	partition int
 	brokers   []string
 	wg        sync.WaitGroup
+	stop      = make(chan struct{})
 	paused    bool
 )
 
@@ -69,7 +69,7 @@ func processor(c *cli.Context) error {
 
 	g.SetManagerFunc(layout)
 	g.Highlight = true
-	g.SelFgColor = gocui.ColorGreen
+	g.SelFgColor = gocui.ColorMagenta
 
 	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
 		log.Panicln(err)
@@ -156,15 +156,12 @@ func processor(c *cli.Context) error {
 	}
 	return nil
 }
-func nextView(g *gocui.Gui, v *gocui.View) error {
-	g.SetCurrentView(viewNames[active])
-	active = (active + 1) % len(viewNames)
 
-	return nil
-}
-
-func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan struct{}) {
+// Model
+func player(g *gocui.Gui, topic string, partition int32, offset int64) {
 	wg.Add(1)
+	defer wg.Done()
+
 	consumer, err := sarama.NewConsumerFromClient(client)
 	if err != nil {
 		panic(err)
@@ -187,7 +184,7 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 			g.Execute(func(g *gocui.Gui) error {
 				v, _ := g.View("data")
 				v.Clear()
-				v.Title = fmt.Sprintf("KEY:%v OFFSET:%v TIMESTAMP:%v", string(msg.Key), msg.Offset, msg.Timestamp)
+				v.Title = fmt.Sprintf("OFFSET:%v KEY:%v TIMESTAMP:%v", msg.Offset, string(msg.Key), msg.Timestamp)
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
 			})
@@ -248,11 +245,17 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 				chMessage = partitionConsumer.Messages()
 			}
 			refreshInfo(g)
-		case <-die:
-			wg.Done()
+		case <-stop:
 			return
 		}
 	}
+}
+
+// View
+func nextView(g *gocui.Gui, v *gocui.View) error {
+	active = (active + 1) % len(viewNames)
+	g.SetCurrentView(viewNames[active])
+	return nil
 }
 
 func cursorUp(g *gocui.Gui, v *gocui.View) error {
@@ -267,6 +270,7 @@ func cursorUp(g *gocui.Gui, v *gocui.View) error {
 	}
 	return nil
 }
+
 func cursorDown(g *gocui.Gui, v *gocui.View) error {
 	if v != nil {
 		cx, cy := v.Cursor()
@@ -278,76 +282,6 @@ func cursorDown(g *gocui.Gui, v *gocui.View) error {
 		}
 	}
 	return nil
-}
-
-func selectTopic(g *gocui.Gui, v *gocui.View) error {
-	var l string
-	var err error
-
-	_, cy := v.Cursor()
-	if l, err = v.Line(cy); err != nil {
-		l = ""
-	}
-	parts, err := client.Partitions(l)
-	if err != nil {
-		panic(err)
-	}
-
-	topic = l
-	maxX, maxY := g.Size()
-	if v, err := g.SetView("partition", maxX/2-10, maxY/2, maxX/2+10, maxY/2+2); err != nil {
-		if err != gocui.ErrUnknownView {
-			return err
-		}
-		for k := range parts {
-			fmt.Fprintln(v, parts[k])
-		}
-		if _, err := g.SetCurrentView("partition"); err != nil {
-			return err
-		}
-		v.Title = "Select Partition"
-	}
-	return nil
-}
-
-func selectPartition(g *gocui.Gui, v *gocui.View) error {
-	var l string
-	var err error
-
-	_, cy := v.Cursor()
-	if l, err = v.Line(cy); err != nil {
-		l = ""
-	}
-	close(breaker)
-	breaker = make(chan struct{})
-	wg.Wait()
-	partition, _ = strconv.Atoi(l)
-	go play(g, topic, int32(partition), sarama.OffsetOldest, breaker)
-
-	if err := g.DeleteView("partition"); err != nil {
-		return err
-	}
-	if _, err := g.SetCurrentView("data"); err != nil {
-		return err
-	}
-	refreshInfo(g)
-	return nil
-}
-
-func refreshInfo(g *gocui.Gui) {
-	g.Execute(func(g *gocui.Gui) error {
-		infoview, _ := g.View("info")
-		infoview.Clear()
-		fmt.Fprintf(infoview, "Brokers: %v\n", brokers)
-		fmt.Fprintf(infoview, "Topic: %v\n", topic)
-		fmt.Fprintf(infoview, "Partition: %v\n", partition)
-		replicas, _ := client.Replicas(topic, int32(partition))
-		fmt.Fprintf(infoview, "Replicas: %v\n", replicas)
-		broker, _ := client.Leader(topic, int32(partition))
-		fmt.Fprintf(infoview, "Leader: %v\n", broker.ID())
-		fmt.Fprintf(infoview, "Paused: %v\n", paused)
-		return nil
-	})
 }
 
 func layout(g *gocui.Gui) error {
@@ -414,6 +348,88 @@ func layout(g *gocui.Gui) error {
 	}
 
 	return nil
+}
+
+// Control
+func selectTopic(g *gocui.Gui, v *gocui.View) error {
+	var l string
+	var err error
+
+	_, cy := v.Cursor()
+	if l, err = v.Line(cy); err != nil {
+		l = ""
+	}
+	parts, err := client.Partitions(l)
+	if err != nil {
+		panic(err)
+	}
+
+	topic = l
+	maxX, maxY := g.Size()
+	if v, err := g.SetView("partition", maxX/2-10, maxY/2, maxX/2+10, maxY/2+2); err != nil {
+		if err != gocui.ErrUnknownView {
+			return err
+		}
+		for k := range parts {
+			fmt.Fprintln(v, parts[k])
+		}
+		if _, err := g.SetCurrentView("partition"); err != nil {
+			return err
+		}
+		v.Title = "Select Partition"
+	}
+	return nil
+}
+
+func selectPartition(g *gocui.Gui, v *gocui.View) error {
+	// get partition
+	var l string
+	var err error
+
+	_, cy := v.Cursor()
+	if l, err = v.Line(cy); err != nil {
+		l = ""
+	}
+	if err := g.DeleteView("partition"); err != nil {
+		return err
+	}
+	if _, err := g.SetCurrentView("data"); err != nil {
+		return err
+	}
+	dataView, _ := g.View("data")
+	dataView.Clear()
+	active = 1
+
+	// turn off player
+	close(stop)
+	stop = make(chan struct{})
+
+	// wait until player exists
+	wg.Wait()
+
+	// create new player for partition
+	partition, _ = strconv.Atoi(l)
+	go player(g, topic, int32(partition), sarama.OffsetNewest)
+
+	// update info
+	refreshInfo(g)
+	return nil
+}
+
+func refreshInfo(g *gocui.Gui) {
+	g.Execute(func(g *gocui.Gui) error {
+		infoview, _ := g.View("info")
+		infoview.Clear()
+		fmt.Fprintf(infoview, "Brokers: %v\n", brokers)
+		fmt.Fprintf(infoview, "Topic: %v\n", topic)
+		fmt.Fprintf(infoview, "Partition: %v\n", partition)
+		replicas, _ := client.Replicas(topic, int32(partition))
+		fmt.Fprintf(infoview, "Replicas: %v\n", replicas)
+		broker, _ := client.Leader(topic, int32(partition))
+		fmt.Fprintf(infoview, "Leader: %v\n", broker.ID())
+		fmt.Fprintf(infoview, "Paused: %v\n", paused)
+		return nil
+	})
 }
 
 func quit(g *gocui.Gui, v *gocui.View) error {
