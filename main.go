@@ -5,12 +5,20 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"time"
 
 	cli "gopkg.in/urfave/cli.v2"
 
 	"github.com/Shopify/sarama"
 	"github.com/jroimartin/gocui"
+)
+
+var (
+	active    = 0
+	viewNames = []string{"topic", "control", "data"}
+	breaker   = make(chan struct{})
+	topic     string
+	partition int
+	brokers   []string
 )
 
 func main() {
@@ -31,6 +39,7 @@ func main() {
 }
 
 func processor(c *cli.Context) error {
+	brokers = c.StringSlice("brokers")
 	g, err := gocui.NewGui(gocui.OutputNormal)
 	if err != nil {
 		log.Panicln(err)
@@ -72,12 +81,6 @@ func processor(c *cli.Context) error {
 	return nil
 }
 
-var active = 0
-var viewNames = []string{"topic", "control", "data"}
-var breaker = make(chan struct{})
-var topic string
-var partition int
-
 func nextView(g *gocui.Gui, v *gocui.View) error {
 	g.SetCurrentView(viewNames[active])
 	active = (active + 1) % len(viewNames)
@@ -86,7 +89,7 @@ func nextView(g *gocui.Gui, v *gocui.View) error {
 }
 
 func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan struct{}) {
-	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
+	client, err := sarama.NewClient(brokers, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -116,7 +119,7 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
 			})
-			<-time.After(20 * time.Millisecond)
+			//<-time.After(20 * time.Millisecond)
 		case <-die:
 			return
 		}
@@ -156,7 +159,7 @@ func selectTopic(g *gocui.Gui, v *gocui.View) error {
 	if l, err = v.Line(cy); err != nil {
 		l = ""
 	}
-	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
+	client, err := sarama.NewClient(brokers, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -196,7 +199,7 @@ func selectPartition(g *gocui.Gui, v *gocui.View) error {
 	breaker = make(chan struct{})
 
 	partition, _ = strconv.Atoi(l)
-	go play(g, topic, int32(partition), 0, breaker)
+	go play(g, topic, int32(partition), sarama.OffsetOldest, breaker)
 
 	if err := g.DeleteView("partition"); err != nil {
 		return err
@@ -209,10 +212,11 @@ func selectPartition(g *gocui.Gui, v *gocui.View) error {
 }
 
 func layout(g *gocui.Gui) error {
-	client, err := sarama.NewClient([]string{"localhost:9092"}, nil)
+	client, err := sarama.NewClient(brokers, nil)
 	if err != nil {
 		panic(err)
 	}
+	defer client.Close()
 
 	maxX, maxY := g.Size()
 	if v, err := g.SetView("topic", 0, 0, 10, maxY-1); err != nil {
