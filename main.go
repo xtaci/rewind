@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -243,6 +244,12 @@ func layout(g *gocui.Gui) error {
 			panic(err)
 		}
 
+		sort.Slice(topics, func(i, j int) bool {
+			if topics[i] < topics[j] {
+				return true
+			}
+			return false
+		})
 		for k := range topics {
 			fmt.Fprintln(v, topics[k])
 		}
