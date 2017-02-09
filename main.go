@@ -16,8 +16,8 @@ import (
 
 const (
 	cmdPlay = iota
-	cmdRewind
-	cmdFF
+	cmdBack
+	cmdForward
 	cmdJumpOldest
 	cmdJmpNewest
 )
@@ -86,23 +86,45 @@ func processor(c *cli.Context) error {
 	if err := g.SetKeybinding("partition", gocui.KeyArrowUp, gocui.ModNone, cursorUp); err != nil {
 		return err
 	}
-	if err := g.SetKeybinding("data", gocui.KeySpace, gocui.ModNone, onCmdPlay); err != nil {
+
+	if err := g.SetKeybinding("data", gocui.KeySpace, gocui.ModNone,
+		func(g *gocui.Gui, v *gocui.View) error {
+			select {
+			case control <- cmdPlay:
+			default:
+			}
+			return nil
+		}); err != nil {
 		return err
 	}
+
+	if err := g.SetKeybinding("data", gocui.KeyArrowLeft, gocui.ModNone,
+		func(g *gocui.Gui, v *gocui.View) error {
+			select {
+			case control <- cmdBack:
+			default:
+			}
+			return nil
+		}); err != nil {
+		return err
+	}
+
+	if err := g.SetKeybinding("data", gocui.KeyArrowRight, gocui.ModNone,
+		func(g *gocui.Gui, v *gocui.View) error {
+			select {
+			case control <- cmdForward:
+			default:
+			}
+			return nil
+		}); err != nil {
+		return err
+	}
+
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
 		log.Panicln(err)
 	}
 	return nil
 }
-
-func onCmdPlay(g *gocui.Gui, v *gocui.View) error {
-	select {
-	case control <- cmdPlay:
-	default:
-	}
-	return nil
-}
-
 func nextView(g *gocui.Gui, v *gocui.View) error {
 	g.SetCurrentView(viewNames[active])
 	active = (active + 1) % len(viewNames)
@@ -127,12 +149,16 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 	if err != nil {
 		panic(err)
 	}
-	defer partitionConsumer.Close()
+
+	defer func() {
+		partitionConsumer.Close()
+	}()
 
 	chMessage := partitionConsumer.Messages()
 	for {
 		select {
 		case msg := <-chMessage:
+			offset = msg.Offset
 			g.Execute(func(g *gocui.Gui) error {
 				v, _ := g.View("data")
 				v.Clear()
@@ -140,6 +166,9 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
 			})
+			if paused {
+				chMessage = nil
+			}
 		case c := <-control:
 			switch c {
 			case cmdPlay:
@@ -149,6 +178,28 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 				} else {
 					chMessage = partitionConsumer.Messages()
 				}
+			case cmdBack:
+				if offset-1 < 0 {
+					continue
+				}
+				paused = true
+				partitionConsumer.Close()
+				partitionConsumer, err = consumer.ConsumePartition(topic, int32(partition), int64(offset-1))
+				if err != nil {
+					panic(err)
+				}
+				chMessage = partitionConsumer.Messages()
+			case cmdForward:
+				paused = true
+				partitionConsumer.Close()
+				partitionConsumer, err = consumer.ConsumePartition(topic, int32(partition), int64(offset+1))
+				if err != nil {
+					partitionConsumer, err = consumer.ConsumePartition(topic, int32(partition), sarama.OffsetNewest)
+					if err != nil {
+						panic(err)
+					}
+				}
+				chMessage = partitionConsumer.Messages()
 			}
 		case <-die:
 			wg.Done()
@@ -295,7 +346,7 @@ func layout(g *gocui.Gui) error {
 		}
 		v.Title = "PLAY"
 		fmt.Fprintln(v, "Space: Pause/Play")
-		fmt.Fprintln(v, "← → : Rewind/FastForward")
+		fmt.Fprintln(v, "← → : Back/Forward")
 		fmt.Fprintln(v, "[: Jump to oldest")
 		fmt.Fprintln(v, "]: Jump to newest")
 		fmt.Fprintln(v, "Ctrl+O: Seek to Offset")
