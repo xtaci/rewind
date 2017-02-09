@@ -19,7 +19,7 @@ const (
 	cmdBack
 	cmdForward
 	cmdJumpOldest
-	cmdJmpNewest
+	cmdJumpNewest
 )
 
 var (
@@ -27,10 +27,12 @@ var (
 	viewNames = []string{"topic", "data"}
 	breaker   = make(chan struct{})
 	control   = make(chan int, 1)
+	client    sarama.Client
 	topic     string
 	partition int
 	brokers   []string
 	wg        sync.WaitGroup
+	paused    bool
 )
 
 func main() {
@@ -52,6 +54,13 @@ func main() {
 
 func processor(c *cli.Context) error {
 	brokers = c.StringSlice("brokers")
+	var err error
+	client, err = sarama.NewClient(brokers, nil)
+	if err != nil {
+		panic(err)
+	}
+	defer client.Close()
+
 	g, err := gocui.NewGui(gocui.OutputNormal)
 	if err != nil {
 		log.Panicln(err)
@@ -120,6 +129,28 @@ func processor(c *cli.Context) error {
 		return err
 	}
 
+	if err := g.SetKeybinding("data", '[', gocui.ModNone,
+		func(g *gocui.Gui, v *gocui.View) error {
+			select {
+			case control <- cmdJumpOldest:
+			default:
+			}
+			return nil
+		}); err != nil {
+		return err
+	}
+
+	if err := g.SetKeybinding("data", ']', gocui.ModNone,
+		func(g *gocui.Gui, v *gocui.View) error {
+			select {
+			case control <- cmdJumpNewest:
+			default:
+			}
+			return nil
+		}); err != nil {
+		return err
+	}
+
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
 		log.Panicln(err)
 	}
@@ -133,13 +164,7 @@ func nextView(g *gocui.Gui, v *gocui.View) error {
 }
 
 func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan struct{}) {
-	var paused bool
 	wg.Add(1)
-	client, err := sarama.NewClient(brokers, nil)
-	if err != nil {
-		panic(err)
-	}
-	defer client.Close()
 	consumer, err := sarama.NewConsumerFromClient(client)
 	if err != nil {
 		panic(err)
@@ -162,11 +187,7 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 			g.Execute(func(g *gocui.Gui) error {
 				v, _ := g.View("data")
 				v.Clear()
-				status := "PLAY"
-				if paused {
-					status = "PAUS"
-				}
-				v.Title = fmt.Sprintf("STATUS:%v KEY:%v OFFSET:%v TIMESTAMP:%v", status, string(msg.Key), msg.Offset, msg.Timestamp)
+				v.Title = fmt.Sprintf("KEY:%v OFFSET:%v TIMESTAMP:%v", string(msg.Key), msg.Offset, msg.Timestamp)
 				fmt.Fprintln(v, string(msg.Value))
 				return nil
 			})
@@ -204,7 +225,29 @@ func play(g *gocui.Gui, topic string, partition int32, offset int64, die chan st
 					}
 				}
 				chMessage = partitionConsumer.Messages()
+			case cmdJumpOldest:
+				paused = true
+				partitionConsumer.Close()
+				partitionConsumer, err = consumer.ConsumePartition(topic, int32(partition), sarama.OffsetOldest)
+				if err != nil {
+					panic(err)
+				}
+				chMessage = partitionConsumer.Messages()
+			case cmdJumpNewest:
+				lastOffset, err := client.GetOffset(topic, int32(partition), sarama.OffsetNewest)
+				if err != nil {
+					panic(err)
+				}
+
+				paused = true
+				partitionConsumer.Close()
+				partitionConsumer, err = consumer.ConsumePartition(topic, int32(partition), lastOffset-1)
+				if err != nil {
+					panic(err)
+				}
+				chMessage = partitionConsumer.Messages()
 			}
+			refreshInfo(g)
 		case <-die:
 			wg.Done()
 			return
@@ -245,12 +288,6 @@ func selectTopic(g *gocui.Gui, v *gocui.View) error {
 	if l, err = v.Line(cy); err != nil {
 		l = ""
 	}
-	client, err := sarama.NewClient(brokers, nil)
-	if err != nil {
-		panic(err)
-	}
-	defer client.Close()
-
 	parts, err := client.Partitions(l)
 	if err != nil {
 		panic(err)
@@ -293,31 +330,27 @@ func selectPartition(g *gocui.Gui, v *gocui.View) error {
 	if _, err := g.SetCurrentView("data"); err != nil {
 		return err
 	}
-	client, err := sarama.NewClient(brokers, nil)
-	if err != nil {
-		panic(err)
-	}
-	defer client.Close()
-
-	infoview, _ := g.View("info")
-	infoview.Clear()
-	fmt.Fprintf(infoview, "Brokers: %v\n", brokers)
-	fmt.Fprintf(infoview, "Topic: %v\n", topic)
-	fmt.Fprintf(infoview, "Partition: %v\n", partition)
-	replicas, _ := client.Replicas(topic, int32(partition))
-	fmt.Fprintf(infoview, "Replicas: %v\n", replicas)
-	broker, _ := client.Leader(topic, int32(partition))
-	fmt.Fprintf(infoview, "Leader: %v\n", broker.ID())
+	refreshInfo(g)
 	return nil
 }
 
-func layout(g *gocui.Gui) error {
-	client, err := sarama.NewClient(brokers, nil)
-	if err != nil {
-		panic(err)
-	}
-	defer client.Close()
+func refreshInfo(g *gocui.Gui) {
+	g.Execute(func(g *gocui.Gui) error {
+		infoview, _ := g.View("info")
+		infoview.Clear()
+		fmt.Fprintf(infoview, "Brokers: %v\n", brokers)
+		fmt.Fprintf(infoview, "Topic: %v\n", topic)
+		fmt.Fprintf(infoview, "Partition: %v\n", partition)
+		replicas, _ := client.Replicas(topic, int32(partition))
+		fmt.Fprintf(infoview, "Replicas: %v\n", replicas)
+		broker, _ := client.Leader(topic, int32(partition))
+		fmt.Fprintf(infoview, "Leader: %v\n", broker.ID())
+		fmt.Fprintf(infoview, "Paused: %v\n", paused)
+		return nil
+	})
+}
 
+func layout(g *gocui.Gui) error {
 	maxX, maxY := g.Size()
 	if v, err := g.SetView("topic", 0, 0, 10, maxY-1); err != nil {
 		if err != gocui.ErrUnknownView {
