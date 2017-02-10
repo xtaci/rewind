@@ -274,6 +274,14 @@ func cursorUp(g *gocui.Gui, v *gocui.View) error {
 func cursorDown(g *gocui.Gui, v *gocui.View) error {
 	if v != nil {
 		cx, cy := v.Cursor()
+		if l, err := v.Line(cy + 1); err == nil {
+			if l == "" {
+				return nil
+			}
+		} else {
+			return err
+		}
+
 		if err := v.SetCursor(cx, cy+1); err != nil {
 			ox, oy := v.Origin()
 			if err := v.SetOrigin(ox, oy+1); err != nil {
