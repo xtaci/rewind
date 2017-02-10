@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strconv"
 	"sync"
 
+	log "github.com/sirupsen/logrus"
 	cli "gopkg.in/urfave/cli.v2"
 
 	"github.com/Shopify/sarama"
@@ -46,6 +46,11 @@ func main() {
 				Value: cli.NewStringSlice("localhost:9092"),
 				Usage: "kafka brokers address",
 			},
+			&cli.StringFlag{
+				Name:  "log",
+				Value: "/var/log/rewind.log",
+				Usage: "log file",
+			},
 		},
 		Action: processor,
 	}
@@ -54,6 +59,15 @@ func main() {
 
 func processor(c *cli.Context) error {
 	brokers = c.StringSlice("brokers")
+	out := c.String("log")
+	if out != "" {
+		if f, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE, 0666); err == nil {
+			log.SetOutput(f)
+		} else {
+			panic(err)
+		}
+	}
+
 	var err error
 	client, err = sarama.NewClient(brokers, nil)
 	if err != nil {
@@ -231,14 +245,9 @@ func player(g *gocui.Gui, topic string, partition int32, offset int64) {
 				}
 				chMessage = partitionConsumer.Messages()
 			case cmdJumpNewest:
-				lastOffset, err := client.GetOffset(topic, int32(partition), sarama.OffsetNewest)
-				if err != nil {
-					panic(err)
-				}
-
-				paused = true
+				paused = false
 				partitionConsumer.Close()
-				partitionConsumer, err = consumer.ConsumePartition(topic, int32(partition), lastOffset-1)
+				partitionConsumer, err = consumer.ConsumePartition(topic, int32(partition), sarama.OffsetNewest)
 				if err != nil {
 					panic(err)
 				}
